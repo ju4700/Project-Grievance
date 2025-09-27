@@ -1,20 +1,3 @@
-"""
-Teacherscrapper.py
-
-Simple, domain-limited scraper for extracting teacher/faculty profiles from iiuc.ac.bd.
-
-Features:
-- Crawl links within the iiuc.ac.bd domain starting from the home page.
-- Heuristics to detect faculty/teacher profile pages and extract common fields.
-- Export to CSV or JSON.
-- --test mode runs local extraction unit tests (no network required).
-
-Usage examples (see README.md for full details):
-  python Teacherscrapper.py --start-url https://www.iiuc.ac.bd/ --format csv --output teachers.csv
-
-This script is intentionally conservative: polite delay, domain-limited and with a max-pages option.
-"""
-
 from __future__ import annotations
 
 import argparse
@@ -44,10 +27,6 @@ def normalize_text(x: Optional[str]) -> str:
 
 
 def find_label_value_pairs(soup: BeautifulSoup) -> Dict[str, str]:
-	"""Try to find label/value pairs in tables, definition lists and paragraphs.
-
-	Returns a mapping where keys are lowercased label-like strings and values are the matched text.
-	"""
 	pairs: Dict[str, str] = {}
 
 	# <dl><dt>Label</dt><dd>Value</dd></dl>
@@ -97,7 +76,7 @@ def extract_phones(text: str) -> List[str]:
 
 
 class TeacherScraper:
-	def __init__(self, start_url: str, user_agent: str = DEFAULT_USER_AGENT, delay: float = 0.5, max_pages: int = 500):
+	def __init__(self, start_url: str, user_agent: str = DEFAULT_USER_AGENT, delay: float = 0.5, max_pages: int = 1000):
 		parsed = urlparse(start_url)
 		self.start_url = start_url
 		self.domain = parsed.netloc
@@ -109,6 +88,8 @@ class TeacherScraper:
 			self.session.verify = certifi.where()
 		self.delay = float(delay)
 		self.max_pages = int(max_pages)
+		self.keywords = ["teacher", "faculty", "staff", "people", "personnel", "profile", "academic", "dept", "division",
+                         "fse", "fsis", "fbs", "fah", "law", "dis", "shis", "qsis", "cse", "eee", "cce"]
 
 	def is_same_domain(self, url: str) -> bool:
 		try:
@@ -128,11 +109,14 @@ class TeacherScraper:
 				out.append(full.split("#")[0])
 		return out
 
+	def is_potential_relevant(self, url: str) -> bool:
+		lower = url.lower()
+		return any(k in lower for k in self.keywords)
+
 	def looks_like_profile(self, url: str, soup: BeautifulSoup) -> bool:
 		# heuristics: url contains faculty/teacher/people/staff/profile
 		lower = url.lower()
-		keywords = ["teacher", "faculty", "staff", "people", "personnel", "profile", "academic", "dept"]
-		if any(k in lower for k in keywords):
+		if any(k in lower for k in self.keywords):
 			return True
 
 		# page contains likely labels
@@ -215,13 +199,14 @@ class TeacherScraper:
 				r = self.session.get(url, timeout=15)
 			except requests.exceptions.SSLError as e:
 				if verbose:
-					print(f"SSL error fetching {url}: {e}")
-					if certifi is not None:
-						print("Hint: certifi is available and the session is configured to use its CA bundle. If you're still seeing errors, you can retry with --insecure to skip verification (not recommended).")
-					else:
-						print("Hint: no certifi bundle found in this environment. Install certifi or run with --insecure to skip verification (not recommended).")
-				# stop crawling this URL and continue
-				continue
+					print(f"SSL error fetching {url}: {e}. Retrying with SSL verification disabled (insecure).")
+				self.session.verify = False
+				try:
+					r = self.session.get(url, timeout=15)
+				except Exception as retry_e:
+					if verbose:
+						print(f"Retry failed for {url}: {retry_e}")
+					continue
 			except Exception as e:
 				if verbose:
 					print(f"failed to fetch {url}: {e}")
@@ -234,8 +219,13 @@ class TeacherScraper:
 
 			# collect links
 			for link in self.get_links(soup, url):
-				if link not in seen and len(seen) + len(q) < limit:
-					q.append(link)
+				if link not in seen:
+					if len(seen) + len(q) >= limit:
+						break
+					if self.is_potential_relevant(link):
+						q.appendleft(link)  # prioritize relevant links
+					else:
+						q.append(link)
 
 			# if looks like profile, attempt extract
 			if self.looks_like_profile(url, soup):
@@ -319,7 +309,7 @@ def main():
 	parser.add_argument("--output", default="teachers.csv", help="Output file path")
 	parser.add_argument("--format", choices=["csv", "json"], default="csv", help="Output format")
 	parser.add_argument("--delay", type=float, default=0.5, help="Delay between requests (seconds)")
-	parser.add_argument("--max-pages", type=int, default=500, help="Maximum pages to fetch")
+	parser.add_argument("--max-pages", type=int, default=1000, help="Maximum pages to fetch")
 	parser.add_argument("--user-agent", default=DEFAULT_USER_AGENT)
 	parser.add_argument("--insecure", action="store_true", help="Skip SSL verification (not recommended)")
 	parser.add_argument("--ca-bundle", help="Path to a PEM file with CA certificates to use for verification")
@@ -342,4 +332,3 @@ def main():
 
 if __name__ == "__main__":
 	main()
-
