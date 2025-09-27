@@ -1,1 +1,1 @@
-Web Interface To File Complaint For IIUC (International Islamic University, Chittagong)
+Web Interface To File Complaint For IIUC (International Islamic University, C)
