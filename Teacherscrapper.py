@@ -28,6 +28,10 @@ from urllib.parse import urljoin, urlparse
 
 import requests
 from bs4 import BeautifulSoup
+try:
+	import certifi
+except Exception:
+	certifi = None
 
 
 DEFAULT_USER_AGENT = "Mozilla/5.0 (compatible; Teacherscrapper/1.0; +https://github.com/)"
@@ -100,6 +104,9 @@ class TeacherScraper:
 		self.scheme = parsed.scheme or "https"
 		self.session = requests.Session()
 		self.session.headers.update({"User-Agent": user_agent})
+		# if certifi is available, prefer its CA bundle
+		if certifi is not None:
+			self.session.verify = certifi.where()
 		self.delay = float(delay)
 		self.max_pages = int(max_pages)
 
@@ -206,6 +213,15 @@ class TeacherScraper:
 			try:
 				time.sleep(self.delay)
 				r = self.session.get(url, timeout=15)
+			except requests.exceptions.SSLError as e:
+				if verbose:
+					print(f"SSL error fetching {url}: {e}")
+					if certifi is not None:
+						print("Hint: certifi is available and the session is configured to use its CA bundle. If you're still seeing errors, you can retry with --insecure to skip verification (not recommended).")
+					else:
+						print("Hint: no certifi bundle found in this environment. Install certifi or run with --insecure to skip verification (not recommended).")
+				# stop crawling this URL and continue
+				continue
 			except Exception as e:
 				if verbose:
 					print(f"failed to fetch {url}: {e}")
@@ -305,6 +321,8 @@ def main():
 	parser.add_argument("--delay", type=float, default=0.5, help="Delay between requests (seconds)")
 	parser.add_argument("--max-pages", type=int, default=500, help="Maximum pages to fetch")
 	parser.add_argument("--user-agent", default=DEFAULT_USER_AGENT)
+	parser.add_argument("--insecure", action="store_true", help="Skip SSL verification (not recommended)")
+	parser.add_argument("--ca-bundle", help="Path to a PEM file with CA certificates to use for verification")
 	parser.add_argument("--test", action="store_true", help="Run local extractor tests (no network)")
 	args = parser.parse_args()
 
@@ -313,6 +331,10 @@ def main():
 		return
 
 	scraper = TeacherScraper(start_url=args.start_url, user_agent=args.user_agent, delay=args.delay, max_pages=args.max_pages)
+	if args.insecure:
+		scraper.session.verify = False
+	if args.ca_bundle:
+		scraper.session.verify = args.ca_bundle
 	print(f"Starting crawl at {args.start_url} (domain={scraper.domain})")
 	results = scraper.crawl(limit=args.max_pages, verbose=True)
 	save_results(results, args.output, fmt=args.format)
